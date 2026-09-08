@@ -1,87 +1,337 @@
 # Project Report: IoT Transformer Vandalism and Intrusion Detection System
 
-![Hardware setup](assets/hardware-setup.jpg)
+<div align="center">
+<img width="100%" alt="Guardian field deployment" src="assets/hardware-setup.jpg" />
+</div>
 
 ## 1. Introduction
 
 This project delivers an automated IoT security system for detecting and alerting on vandalism, theft, and unauthorized intrusion at unmanned distribution transformer sites. It uses a LoRaWAN-connected PIR motion sensor to detect physical intrusion events, a private LoRaWAN network server for message routing, a cloud IoT platform for rule processing and alerting, and a relay/actuator node capable of triggering a local response — all without depending on site power or wired connectivity.
 
+<div align="center">
+<img src="assets/hardware-circuit.jpg" alt="Hardware Circuit" width="600"/>
+<br>
+<em>Figure 1 - Hardware Circuit</em>
+</div>
 ---
 
 ## 2. System Architecture
 
-The solution combines a battery-powered LoRaWAN sensor node, a private LoRaWAN network server, a cloud IoT rule engine, and a relay/actuator node for local response.
+The solution is composed of embedded hardware, cloud communication services, a data storage layer, and a visualization interface.
 
 ### Technologies Used
 
-| Component | Description |
-|---|---|
-| WS203 PIR LoRaWAN Sensor | Detects motion/intrusion at the transformer site and transmits uplink events over LoRaWAN |
-| Dragino LT-22222-L | LoRaWAN relay/actuator node — receives downlink commands to drive relay outputs |
-| LoRaWAN Gateway | Forwards sensor uplinks to the network server and delivers downlinks back to field nodes |
-| Loriot NMS (private instance) | LoRaWAN Network Server — manages device sessions, uplink/downlink routing, and payload decoding/encoding |
-| ThingsBoard Cloud | IoT platform for rule-chain processing, alerting logic, dashboards, and downlink orchestration |
-| TBEL | ThingsBoard Expression Language used for rule-chain payload encoding/decoding |
-| Email/SMTP Alerting | Notifies site operators when an intrusion event is confirmed |
+| Component             | Description                                        |
+| --------------------- | -------------------------------------------------- |
+| ESP32                 | Provides Wi-Fi connectivity and system control     |
+| SAM-M10Q GPS Module   | Acquires GPS positioning data                      |
+| OLED Display (128×64) | Displays device status and diagnostic information  |
+| ESP-IDF               | Development framework for ESP32                    |
+| FreeRTOS              | Real-time operating system used by ESP-IDF         |
+| HiveMQ                | MQTT broker hosting platform                       |
+| Node-RED              | Message processing, automation, and user dashboard |
+| InfluxDB              | Time-series database used to store tracking data   |
+
+### System Diagram
+
+```mermaid
+flowchart LR
+
+GPS[SAM-M10Q GPS Module]
+ESP[ESP32 Device]
+NTP[pool.ntp.org]
+MQTT[MQTT Broker]
+NR[Node-RED]
+DB[(InfluxDB)]
+USER[User Dashboard]
+
+GPS -->|UART| ESP
+ESP -->|Wi-Fi + MQTTS| MQTT
+ESP -->|NTP Sync| NTP
+
+MQTT <--> NR
+NR --> DB
+USER <--> NR
+```
 
 ---
 
-## 3. Field Node Architecture
+## 3. ESP32 Application Architecture
 
-#### WS203 PIR Sensor
-Detects motion within its coverage zone at the transformer site and publishes an uplink event over LoRaWAN when triggered. Battery-powered for unattended field deployment.
+The embedded application follows an event-driven architecture using the ESP-IDF Event Loop.
 
-#### Dragino LT-22222-L Relay Node
-Receives downlink commands routed through Loriot and ThingsBoard, driving physical relay outputs for local alarm activation or remote actuation.
+### Application Components
 
-#### LoRaWAN Gateway
-Bridges field-node radio traffic to the private Loriot network server instance.
+```mermaid
+flowchart TB
 
-#### Loriot Network Server
-Manages device authentication, session state, and uplink/downlink routing. Downlink payloads are generated using a TBEL-based downlink converter.
+EV[Default Event Loop]
 
-#### ThingsBoard Rule Engine
-Evaluates incoming telemetry against alerting rules and triggers the email notification pipeline and/or downlink actuation commands.
+GPS[GPS Module]
+SYS[System API]
+WIFI[Wi-Fi Manager]
+DISP[OLED Display]
+CMD[Command Interface]
+
+GPS -->|Publish Events| EV
+CMD -->|Publish Events| EV
+
+EV <--> SYS
+EV <--> WIFI
+EV --> DISP
+
+USER[Serial User] --> CMD
+
+SYS -->|MQTTS| MQTT[MQTT Broker]
+```
+
+### Component Responsibilities
+
+#### GPS Module
+
+Responsible for communication with the SAM-M10Q GPS receiver and generation of location events.
+
+#### System API
+
+Handles MQTT communication, system synchronization, and internal time management.
+
+#### Wi-Fi Manager
+
+Responsible for network connectivity and reconnection procedures.
+
+#### OLED Display
+
+Displays operational information and diagnostics.
+
+#### Command Interface
+
+Receives commands through the serial interface, such as Wi-Fi credential updates.
 
 ---
 
 ## 4. Security
 
-- Device authentication and session management are handled by a private Loriot NMS instance rather than a shared public server.
-- Downlink commands require a valid Application Access Token; token validity is checked before any downlink is enqueued.
-- Rule-chain logic runs in TBEL to stay within ThingsBoard Cloud execution limits and avoid silent rule failures that could suppress alerts.
+Communication between devices and the MQTT broker uses MQTTS (MQTT over TLS). Certificate validation is performed using the ESP-IDF built-in certificate bundle. MQTT authentication requires valid user credentials.
+
+Node-RED also connects securely to the broker using TLS authentication.
+
+InfluxDB operates locally and is not exposed to external networks, reducing the attack surface of the system.
 
 ---
 
-## 5. Example Payloads
+## 5. Sequence Diagrams
 
-**Uplink — Intrusion Event**
+### Wi-Fi Configuration
 
-    {
-      "motion_detected": true,
-      "battery_v": 3.6,
-      "timestamp": 0
-    }
+```mermaid
+sequenceDiagram
 
-**Downlink — Relay Command**
+participant User
+participant CommandInterface
+participant EventLoop
+participant WiFi
 
-    {
-      "relay1": true
-    }
-
----
-
-## 6. Reference Documentation
-
-Detailed integration and configuration guides are available in the docs folder:
-
-- Milesight_WS203_LORIOT_Integration_Guide — sensor-to-network-server integration steps
-- QGEG_Dragino_LT22222L_LORIOT_Professional — relay node configuration
-- QGEG_Motion_Alert_System.docx — full system design and alert logic
-- UC100_RS485_Motion_Event_Detection — RS485 motion event handling reference
+User->>CommandInterface: wifi,<ssid>,<password>
+CommandInterface->>EventLoop: Publish Configuration Event
+EventLoop->>WiFi: Update Credentials
+WiFi-->>EventLoop: Connection Result
+```
 
 ---
 
-## 7. Conclusion
+### MQTT Connection and Device Status
 
-This system demonstrates an end-to-end IoT security pipeline for unmanned transformer sites — from field-level intrusion detection through a private LoRaWAN network, cloud-based rule processing, and real-time alerting, with the option for local relay-based response. The architecture is extendable to additional sensor types and multi-site fleet monitoring as part of the broader QGEG smart grid platform.
+The device publishes its online status using MQTT Last Will and Testament (LWT).
+
+**Topic**
+
+```text
+/tracking_device/<id>/status
+```
+
+**Payload**
+
+```json
+{
+  "online": true
+}
+```
+
+```mermaid
+sequenceDiagram
+
+participant ESP32
+participant Broker
+participant NodeRED
+participant Dashboard
+participant User
+
+ESP32->>Broker: Publish Status
+Broker->>NodeRED: Forward Message
+NodeRED->>Dashboard: Update Status
+Dashboard->>User: Show Device State
+```
+
+---
+
+### Device State Transmission
+
+**Topic**
+
+```text
+/tracking_device/<id>/state
+```
+
+**Payload**
+
+```json
+{
+  "latitude": 0.0,
+  "longitude": 0.0,
+  "altitude": 0.0,
+  "speed_kmh": 0.0,
+  "course_deg": 0.0,
+  "satellites": 0,
+  "hdop": 0,
+  "timestamp": 0,
+  "time_on": 0
+}
+```
+
+```mermaid
+sequenceDiagram
+
+participant ESP32
+participant Broker
+participant NodeRED
+participant Dashboard
+participant InfluxDB
+
+ESP32->>Broker: Publish State
+Broker->>NodeRED: Forward State
+NodeRED->>Dashboard: Update Map
+NodeRED->>InfluxDB: Store Record
+```
+
+---
+
+### Device Information Transmission
+
+**Topic**
+
+```text
+/tracking_device/<id>/info
+```
+
+**Payload**
+
+```json
+{
+  "ip": "192.168.1.100",
+  "timestamp": 0,
+  "time_on": 0
+}
+```
+
+```mermaid
+sequenceDiagram
+
+participant ESP32
+participant Broker
+participant NodeRED
+participant Dashboard
+
+ESP32->>Broker: Publish Info
+Broker->>NodeRED: Forward Info
+NodeRED->>Dashboard: Update Device Information
+```
+
+---
+
+## 6. Node-RED Flows
+
+### Get Last Device State
+
+Queries InfluxDB for the latest known position of each device within the last 30 days and displays the results on the map.
+
+<div align="center">
+<img src="assets/Captura de tela 2026-06-03 012943.png" width="900"/>
+</div>
+
+---
+
+### Clear Paths
+
+Removes all displayed routes from the map interface.
+
+<div align="center">
+<img src="assets/Captura de tela 2026-06-03 012952.png" width="900"/>
+</div>
+
+---
+
+### Store Device State
+
+Processes incoming state messages and stores them in InfluxDB.
+
+<div align="center">
+<img src="assets/Captura de tela 2026-06-03 013016.png" width="900"/>
+</div>
+
+---
+
+### SIM Device
+
+Generates simulated GPS data for testing and demonstration purposes.
+
+<div align="center">
+<img src="assets/Captura de tela 2026-06-03 013023.png" width="900"/>
+</div>
+
+---
+
+### Update Device Information
+
+Updates the dashboard with current device information and provides actions such as focusing the map on a selected device or retrieving historical routes.
+
+<div align="center">
+<img src="assets/Captura de tela 2026-06-03 013040.png" width="900"/>
+</div>
+
+---
+
+## 7. User Interface
+
+### No Connected Devices
+
+Dashboard state when no devices are online.
+
+<div align="center">
+<img src="assets/Captura de tela 2026-06-03 031806.png" width="900"/>
+</div>
+
+---
+
+### Simulated Device Online
+
+Dashboard displaying an active simulated device.
+
+<div align="center">
+<img src="assets/Captura de tela 2026-06-03 031823.png" width="900"/>
+</div>
+
+---
+
+### Historical Route Visualization
+
+Dashboard displaying the historical route of the simulated device.
+
+<div align="center">
+<img src="assets/Captura de tela 2026-06-03 031840.png" width="900"/>
+</div>
+
+---
+
+## 8. Conclusion
+
+The developed system successfully demonstrates an end-to-end IoT tracking solution capable of collecting GPS information, transmitting data securely through MQTT, storing historical records in a time-series database, and providing real-time visualization through a web dashboard. The modular architecture based on ESP-IDF, FreeRTOS, Node-RED, and InfluxDB allows the platform to be easily extended for additional telemetry data, fleet monitoring, and advanced analytics.
