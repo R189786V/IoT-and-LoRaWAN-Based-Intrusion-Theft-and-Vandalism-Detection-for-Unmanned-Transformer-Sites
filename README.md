@@ -40,11 +40,11 @@ The solution combines a battery-powered LoRaWAN sensor node, a private LoRaWAN n
 
 | WS203 PIR LoRaWAN Sensor | Detects motion/intrusion at the transformer site and transmits uplink events over LoRaWAN |
 
-| Dragino LT-22222-L | LoRaWAN relay/actuator node â€” receives downlink commands to drive relay outputs |
+| Dragino LT-22222-L | LoRaWAN relay/actuator node — receives downlink commands to drive relay outputs |
 
 | LoRaWAN Gateway | Forwards sensor uplinks to the network server and delivers downlinks back to field nodes |
 
-| Loriot NMS (private instance) | LoRaWAN Network Server â€” manages device sessions, uplink/downlink routing, and payload decoding/encoding |
+| Loriot NMS (private instance) | LoRaWAN Network Server — manages device sessions, uplink/downlink routing, and payload decoding/encoding |
 
 | ThingsBoard Cloud | IoT platform for rule-chain processing, alerting logic, dashboards, and downlink orchestration |
 
@@ -194,7 +194,7 @@ Relay->>Relay: Drive Relay Output
 
 
 
-\*\*Uplink â€” Intrusion Event\*\*
+\*\*Uplink — Intrusion Event\*\*
 
 ```json
 
@@ -212,7 +212,7 @@ Relay->>Relay: Drive Relay Output
 
 
 
-\*\*Downlink â€” Relay Command\*\*
+\*\*Downlink — Relay Command\*\*
 
 ```json
 
@@ -238,13 +238,13 @@ Detailed integration and configuration guides are available in \[`/docs`](./docs
 
 
 
-\- `Milesight\_WS203\_LORIOT\_Integration\_Guide` â€” sensor-to-network-server integration steps
+\- `Milesight\_WS203\_LORIOT\_Integration\_Guide` — sensor-to-network-server integration steps
 
-\- `QGEG\_Dragino\_LT22222L\_LORIOT\_Professional` â€” relay node configuration
+\- `QGEG\_Dragino\_LT22222L\_LORIOT\_Professional` — relay node configuration
 
-\- `QGEG\_Motion\_Alert\_System.docx` â€” full system design and alert logic
+\- `QGEG\_Motion\_Alert\_System.docx` — full system design and alert logic
 
-\- `UC100\_RS485\_Motion\_Event\_Detection` â€” RS485 motion event handling reference
+\- `UC100\_RS485\_Motion\_Event\_Detection` — RS485 motion event handling reference
 
 
 
@@ -256,5 +256,5 @@ Detailed integration and configuration guides are available in \[`/docs`](./docs
 
 
 
-This system demonstrates an end-to-end IoT security pipeline for unmanned transformer sites â€” from field-level intrusion detection through a private LoRaWAN network, cloud-based rule processing, and real-time alerting, with the option for local relay-based response. The architecture is extendable to additional sensor types and multi-site fleet monitoring as part of the broader QGEG smart grid platform.
+This system demonstrates an end-to-end IoT security pipeline for unmanned transformer sites — from field-level intrusion detection through a private LoRaWAN network, cloud-based rule processing, and real-time alerting, with the option for local relay-based response. The architecture is extendable to additional sensor types and multi-site fleet monitoring as part of the broader QGEG smart grid platform.
 
