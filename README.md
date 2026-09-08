@@ -1,4 +1,8 @@
-\# IoT and LoRaWAN-Based Intrusion, Theft and Vandalism Detection for Unmanned Transformer Sites
+\# Project Report: IoT Transformer Vandalism and Intrusion Detection System
+
+
+
+!\[Hardware setup](assets/hardware-setup.jpg)
 
 
 
@@ -6,7 +10,7 @@
 
 
 
-This project delivers an automated IoT security system for detecting and alerting on vandalism, theft, and unauthorized intrusion at unmanned distribution transformer sites. It uses a LoRaWAN-connected PIR motion sensor to detect physical intrusion events, a private LoRaWAN network server for message routing, a cloud IoT platform for rule processing and alerting, and a relay/actuator node capable of triggering a local response — all without depending on site power or wired connectivity.
+This project delivers an automated IoT security system for detecting and alerting on vandalism, theft, and unauthorized intrusion at unmanned distribution transformer sites. It uses LoRaWAN-connected PIR motion sensors to detect physical intrusion events, a private Loriot LoRaWAN network server for message routing, Thingsboard cloud IoT platform for rule processing and alerting, and a Dragino controller for relay/actuator node capable of triggering a local response 
 
 
 
