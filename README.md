@@ -17,20 +17,19 @@ This project delivers an automated IoT security system for detecting and alertin
 
 ## 2. System Architecture
 
-The solution is composed of embedded hardware, cloud communication services, a data storage layer, and a visualization interface.
+The solution combines a battery-powered LoRaWAN sensor node, a private LoRaWAN network server, a cloud IoT rule engine, and a relay/actuator node for local response.
 
 ### Technologies Used
 
-| Component             | Description                                        |
-| --------------------- | -------------------------------------------------- |
-| ESP32                 | Provides Wi-Fi connectivity and system control     |
-| SAM-M10Q GPS Module   | Acquires GPS positioning data                      |
-| OLED Display (128×64) | Displays device status and diagnostic information  |
-| ESP-IDF               | Development framework for ESP32                    |
-| FreeRTOS              | Real-time operating system used by ESP-IDF         |
-| HiveMQ                | MQTT broker hosting platform                       |
-| Node-RED              | Message processing, automation, and user dashboard |
-| InfluxDB              | Time-series database used to store tracking data   |
+| Component | Description |
+|---|---|
+| WS203 PIR LoRaWAN Sensor | Detects motion/intrusion at the transformer site and transmits uplink events over LoRaWAN |
+| Dragino LT-22222-L | LoRaWAN relay/actuator node — receives downlink commands to drive relay outputs |
+| LoRaWAN Gateway | Forwards sensor uplinks to the network server and delivers downlinks back to field nodes |
+| Loriot NMS (private instance) | LoRaWAN Network Server — manages device sessions, uplink/downlink routing, and payload decoding/encoding |
+| ThingsBoard Cloud | IoT platform for rule-chain processing, alerting logic, dashboards, and downlink orchestration |
+| TBEL | ThingsBoard Expression Language used for rule-chain payload encoding/decoding |
+| Email/SMTP Alerting | Notifies site operators when an intrusion event is confirmed |
 
 ### System Diagram
 
