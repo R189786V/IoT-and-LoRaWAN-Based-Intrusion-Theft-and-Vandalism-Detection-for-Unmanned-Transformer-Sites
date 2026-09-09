@@ -31,306 +31,360 @@ The solution combines a battery-powered LoRaWAN sensor node, a private LoRaWAN n
 | TBEL | ThingsBoard Expression Language used for rule-chain payload encoding/decoding |
 | Email/SMTP Alerting | Notifies site operators when an intrusion event is confirmed |
 
+
 ### System Diagram
 
 ```mermaid
 flowchart LR
 
-GPS[SAM-M10Q GPS Module]
-ESP[ESP32 Device]
-NTP[pool.ntp.org]
-MQTT[MQTT Broker]
-NR[Node-RED]
-DB[(InfluxDB)]
-USER[User Dashboard]
+PIR[WS203 / W202 PIR LoRaWAN Sensor]
+GW[LoRaWAN Gateway]
+LORIOT[Loriot NMS<br/>private instance - powertel.co.zw]
+TB[ThingsBoard Cloud<br/>Rule Chains]
+RELAY[Dragino LT-22222-L<br/>Relay / Actuator]
+SMTP[SMTP Email Alert]
+OPS[Site Operators]
 
-GPS -->|UART| ESP
-ESP -->|Wi-Fi + MQTTS| MQTT
-ESP -->|NTP Sync| NTP
+PIR -->|LoRaWAN Uplink| GW
+GW -->|Uplink| LORIOT
+LORIOT -->|HTTP Integration| TB
 
-MQTT <--> NR
-NR --> DB
-USER <--> NR
+TB -->|Create Alarm + Send Email| SMTP
+SMTP --> OPS
+
+TB -->|Downlink Command 030111| LORIOT
+LORIOT -->|Downlink| GW
+GW -->|LoRaWAN Downlink| RELAY
 ```
+
+*Figure 2 - Guardian end-to-end data flow: sensor uplink triggers a ThingsBoard rule chain, which raises an alarm, emails site operators, and issues a downlink to actuate the relay node.*
 
 ---
 
-## 3. ESP32 Application Architecture
+## 3. ThingsBoard Rule Chain Architecture
 
-The embedded application follows an event-driven architecture using the ESP-IDF Event Loop.
+Rule processing runs entirely in ThingsBoard Cloud, split into a **Root Rule Chain** that routes incoming messages, and one **device-specific alarm chain per sensor** (`WS202 ALARM`, `WS203 ALARM`).
 
-### Application Components
+![Rule chains overview](assets/rule-chains-overview.png)
+*Figure 3 - The three rule chains configured in ThingsBoard: Root Rule Chain, WS202 ALARM, WS203 ALARM.*
+
+### Root Rule Chain
 
 ```mermaid
-flowchart TB
+flowchart LR
 
-EV[Default Event Loop]
+IN[Incoming Message]
+ENT[Entity Type Filter<br/>Is Entity Group]
+MTF[Message Type Filter<br/>Post attributes or RPC]
+DUP[Duplicate to Group]
+MTS[Message Type Switch]
+SAVEA[Save Attributes]
+SAVET[Save Timeseries]
+RPCFROM[Log RPC from Device]
+RPCTO[Log Other]
+RPCCALL[RPC Call Request]
+WS202[WS202 ALARM<br/>rule chain]
+WS203[WS203 ALARM<br/>rule chain]
 
-GPS[GPS Module]
-SYS[System API]
-WIFI[Wi-Fi Manager]
-DISP[OLED Display]
-CMD[Command Interface]
+IN --> ENT
+ENT -->|False| MTF
+ENT -->|True| MTS
+MTF -->|True| DUP
+MTF -->|False| MTS
+DUP -->|Success| MTS
 
-GPS -->|Publish Events| EV
-CMD -->|Publish Events| EV
+MTS -->|Post attributes| SAVEA
+MTS -->|Post telemetry| SAVET
+MTS -->|RPC Request from Device| RPCFROM
+MTS -->|Other| RPCTO
+MTS -->|RPC Request to Device| RPCCALL
 
-EV <--> SYS
-EV <--> WIFI
-EV --> DISP
-
-USER[Serial User] --> CMD
-
-SYS -->|MQTTS| MQTT[MQTT Broker]
+SAVET -->|Success| WS203
+SAVET -->|Success| WS202
 ```
 
-### Component Responsibilities
+*Figure 4 - Root Rule Chain: telemetry is saved, then forwarded into both device alarm chains, which each filter for their own device.*
 
-#### GPS Module
+### Device Alarm Chain (WS202 ALARM / WS203 ALARM)
 
-Responsible for communication with the SAM-M10Q GPS receiver and generation of location events.
+Both device chains share the same structure — one instance per sensor:
 
-#### System API
+```mermaid
+flowchart LR
 
-Handles MQTT communication, system synchronization, and internal time management.
+INPUT[Input]
+FILTER[Filter My Device]
+MOTION[Detect Motion]
+DEDUP[Deduplication - 10s]
+META[Generate Metadata]
+ALARM[Create Alarm]
+T1[Transformation - email]
+T2[Transformation - downlink]
+DOWN[Integration Downlink]
+EMAIL[Send Email]
 
-#### Wi-Fi Manager
+INPUT --> FILTER
+FILTER -->|True| MOTION
+MOTION -->|True| DEDUP
+FILTER -->|Success| T2
+DEDUP -->|Success| T2
+T2 -->|Success| DOWN
 
-Responsible for network connectivity and reconnection procedures.
+DEDUP -->|Success| META
+META -->|Success| ALARM
+ALARM -->|Updated| T1
+T1 -->|Success| EMAIL
+```
 
-#### OLED Display
+*Figure 5 - Device alarm chain: a confirmed motion event both raises a ThingsBoard alarm + email, and independently triggers a downlink back to the relay node.*
 
-Displays operational information and diagnostics.
+![WS202 ALARM rule chain](assets/ws202-alarm-rule-chain.png)
+*Figure 6 - WS202 ALARM rule chain as configured in ThingsBoard.*
 
-#### Command Interface
-
-Receives commands through the serial interface, such as Wi-Fi credential updates.
+![WS203 ALARM rule chain](assets/ws203-alarm-rule-chain.png)
+*Figure 7 - WS203 ALARM rule chain as configured in ThingsBoard.*
 
 ---
 
 ## 4. Security
 
-Communication between devices and the MQTT broker uses MQTTS (MQTT over TLS). Certificate validation is performed using the ESP-IDF built-in certificate bundle. MQTT authentication requires valid user credentials.
+- The LoRaWAN network is served by a **private Loriot NMS instance** (`lorawan.powertel.co.zw`), rather than a public network server, limiting exposure of device sessions and payloads.
+- The Loriot–ThingsBoard integration is authenticated with an **Application Access Token**, scoped to a single Loriot Application ID.
+- Downlinks to the relay node are only issued by the rule chain after a filtered, deduplicated, positively-identified motion event — reducing the chance of spurious relay actuation.
+- Alert emails are sent over **SMTP with TLS (TLSv1.2) enabled**.
+- ThingsBoard Cloud sits behind account-level authentication; rule chain and integration credentials are not stored in device firmware.
 
-Node-RED also connects securely to the broker using TLS authentication.
+![Loriot integration configuration](assets/loriot-integration-config.png)
+*Figure 8 - Loriot → ThingsBoard integration configuration (Application Access Token redacted).*
 
-InfluxDB operates locally and is not exposed to external networks, reducing the attack surface of the system.
+> **Note:** the Application Access Token and Downlink URL shown above are live credentials for this deployment. Treat this screenshot as sensitive — do not publish an unredacted version, and rotate the token if it has ever been shared outside the team.
 
 ---
 
 ## 5. Sequence Diagrams
 
-### Wi-Fi Configuration
+### Intrusion Alert Flow
 
 ```mermaid
 sequenceDiagram
 
-participant User
-participant CommandInterface
-participant EventLoop
-participant WiFi
+participant Sensor as WS203/WS202 PIR Sensor
+participant GW as LoRaWAN Gateway
+participant Loriot as Loriot NMS
+participant TB as ThingsBoard Rule Chain
+participant SMTP as SMTP Server
+participant Ops as Site Operators
 
-User->>CommandInterface: wifi,<ssid>,<password>
-CommandInterface->>EventLoop: Publish Configuration Event
-EventLoop->>WiFi: Update Credentials
-WiFi-->>EventLoop: Connection Result
+Sensor->>GW: LoRaWAN Uplink (motion payload)
+GW->>Loriot: Forward Uplink
+Loriot->>TB: HTTP Integration (uplink)
+TB->>TB: Decode payload (Uplink Converter)
+TB->>TB: Filter My Device -> Detect Motion -> Deduplication
+TB->>TB: Generate Metadata -> Create Alarm
+TB->>SMTP: Send Email (Transformation -> Send Email)
+SMTP->>Ops: Motion Alert - Transformer Site
+```
+
+### Relay Trigger (Downlink) Flow
+
+```mermaid
+sequenceDiagram
+
+participant TB as ThingsBoard Rule Chain
+participant Loriot as Loriot NMS
+participant GW as LoRaWAN Gateway
+participant Relay as Dragino LT-22222-L
+
+TB->>TB: Transformation (downlink) sets payloadHex = "030111"
+TB->>Loriot: Integration Downlink (Downlink Converter)
+Loriot->>GW: Queue Downlink for device EUI
+GW->>Relay: LoRaWAN Downlink, port 2
+Relay->>Relay: Drive relay output
 ```
 
 ---
 
-### MQTT Connection and Device Status
+## 6. Rule Chain Scripts (TBEL)
 
-The device publishes its online status using MQTT Last Will and Testament (LWT).
+### Uplink Converter — Payload Decoder
 
-**Topic**
+Decodes raw LoRaWAN bytes from the WS203/W202 sensors into telemetry values (battery, temperature, PIR trigger, humidity, daylight, occupancy/motion).
 
-```text
-/tracking_device/<id>/status
-```
+```javascript
+function payloadDecoder(payload, metadata) {
+    var values = {};
 
-**Payload**
+    for (var i = 0; i < payload.length;) {
+        var channel = payload[i++];
+        var type = payload[i++];
 
-```json
-{
-  "online": true
+        // Battery (WS203 + W202)
+        if (channel === 0x01 && type === 0x75) {
+            var battery = payload[i];
+            if (battery >= 0 && battery <= 100) {
+                values.battery = battery;
+            }
+            i += 1;
+        }
+        // Temperature (WS203)
+        else if (channel === 0x03 && type === 0x67) {
+            var temp = (payload[i] | (payload[i + 1] << 8));
+            if (temp > 32767) {
+                temp -= 65536;
+            }
+            values.temperature = temp / 10;
+            i += 2;
+        }
+        // PIR Status (W202)
+        else if (channel === 0x03 && type === 0x00) {
+            values.pir = payload[i] === 1 ? "trigger" : "normal";
+            values.motion = payload[i] === 1 ? 1 : 0;
+            i += 1;
+        }
+        // Humidity (WS203)
+        else if (channel === 0x04 && type === 0x68) {
+            values.humidity = payload[i] / 2;
+            i += 1;
+        }
+        // Daylight (W202)
+        else if (channel === 0x04 && type === 0x00) {
+            values.daylight = payload[i] === 1 ? "bright" : "dim";
+            i += 1;
+        }
+        // Occupancy (WS203)
+        else if (channel === 0x05 && type === 0x00) {
+            values.occupancy = payload[i];
+            values.motion = payload[i] === 1 ? 1 : 0;
+            i += 1;
+        }
+        else {
+            i += 1;
+        }
+    }
+
+    return {
+        telemetry: {
+            ts: metadata.ts,
+            values: values
+        },
+        attributes: {}
+    };
 }
+
+return payloadDecoder(payload, metadata);
 ```
 
-```mermaid
-sequenceDiagram
+**Telemetry keys produced:** `battery`, `motion`, `occupancy`, `temperature`, `humidity`, `event`, `motion_triggered`, `pir`, `daylight`
 
-participant ESP32
-participant Broker
-participant NodeRED
-participant Dashboard
-participant User
+**Integration endpoint:**
+`https://thingsboard.cloud/api/v1/integrations/loriot/<integration-id>`
 
-ESP32->>Broker: Publish Status
-Broker->>NodeRED: Forward Message
-NodeRED->>Dashboard: Update Status
-Dashboard->>User: Show Device State
+### Downlink Converter
+
+Builds the relay-trigger downlink sent back to the device (`030111` hex = relay ON command) on port 2.
+
+```javascript
+var hexData = msg.payloadHex != null ? msg.payloadHex : "030111";
+
+return {
+    contentType: "JSON",
+    data: hexData,
+    metadata: {
+        EUI: "<device-eui>",
+        port: 2,
+        isHexEncoded: "true"
+    }
+};
 ```
 
----
+### Device Alarm Chain Scripts
 
-### Device State Transmission
+**Filter My Device**
 
-**Topic**
-
-```text
-/tracking_device/<id>/state
+```javascript
+return metadata.deviceName != null &&
+       metadata.deviceName === "<device-name>";
 ```
 
-**Payload**
+**Detect Motion**
 
-```json
-{
-  "latitude": 0.0,
-  "longitude": 0.0,
-  "altitude": 0.0,
-  "speed_kmh": 0.0,
-  "course_deg": 0.0,
-  "satellites": 0,
-  "hdop": 0,
-  "timestamp": 0,
-  "time_on": 0
+```javascript
+var motion;
+if (msg.motion != null) {
+    motion = msg.motion;
+} else {
+    motion = msg.data.motion;
 }
-```
 
-```mermaid
-sequenceDiagram
-
-participant ESP32
-participant Broker
-participant NodeRED
-participant Dashboard
-participant InfluxDB
-
-ESP32->>Broker: Publish State
-Broker->>NodeRED: Forward State
-NodeRED->>Dashboard: Update Map
-NodeRED->>InfluxDB: Store Record
-```
-
----
-
-### Device Information Transmission
-
-**Topic**
-
-```text
-/tracking_device/<id>/info
-```
-
-**Payload**
-
-```json
-{
-  "ip": "192.168.1.100",
-  "timestamp": 0,
-  "time_on": 0
+if (motion != 1 && motion !== "1" && motion !== true) {
+    return false;
 }
+
+return true;
 ```
 
-```mermaid
-sequenceDiagram
+**Generate Metadata**
 
-participant ESP32
-participant Broker
-participant NodeRED
-participant Dashboard
+```javascript
+metadata.subject = "Motion Alert - Transformer Site";
+metadata.body = "Motion detected on device: " + metadata.deviceName +
+                "\nTime: " + new Date(parseInt(metadata.ts)).toString() +
+                "\nTemperature: " + msg.temperature + "°C" +
+                "\nHumidity: " + msg.humidity + "%" +
+                "\nBattery: " + msg.battery;
 
-ESP32->>Broker: Publish Info
-Broker->>NodeRED: Forward Info
-NodeRED->>Dashboard: Update Device Information
+return {msg: msg, metadata: metadata, msgType: msgType};
 ```
 
----
+**Create Alarm**
 
-## 6. Node-RED Flows
+```javascript
+var details = {};
+if (metadata.prevAlarmDetails) {
+    details = JSON.parse(metadata.prevAlarmDetails);
+    // remove prevAlarmDetails from metadata
+    delete metadata.prevAlarmDetails;
+    // now metadata is the same as it comes IN this rule node
+}
 
-### Get Last Device State
+return details;
+```
 
-Queries InfluxDB for the latest known position of each device within the last 30 days and displays the results on the map.
+**Transformation (Send Email)**
 
-<div align="center">
-<img src="assets/Captura de tela 2026-06-03 012943.png" width="900"/>
-</div>
+```javascript
+return {
+    msg: {
+        to: "<alert-recipients>",
+        subject: "Motion Detected",
+        body: "Motion detected from " + metadata.deviceName
+    },
+    metadata: metadata,
+    msgType: "SEND_EMAIL"
+};
+```
 
----
+**Transformation (Downlink)**
 
-### Clear Paths
+```javascript
+msg.payloadHex = "030111";
 
-Removes all displayed routes from the map interface.
+return {
+  msg: msg,
+  metadata: metadata,
+  msgType: msgType
+};
+```
 
-<div align="center">
-<img src="assets/Captura de tela 2026-06-03 012952.png" width="900"/>
-</div>
+### Send Email Node Configuration
 
----
+![Send email SMTP configuration](assets/send-email-smtp-config.png)
+*Figure 9 - SMTP configuration for the Send Email node (TLS enabled, TLSv1.2).*
 
-### Store Device State
-
-Processes incoming state messages and stores them in InfluxDB.
-
-<div align="center">
-<img src="assets/Captura de tela 2026-06-03 013016.png" width="900"/>
-</div>
-
----
-
-### SIM Device
-
-Generates simulated GPS data for testing and demonstration purposes.
-
-<div align="center">
-<img src="assets/Captura de tela 2026-06-03 013023.png" width="900"/>
-</div>
-
----
-
-### Update Device Information
-
-Updates the dashboard with current device information and provides actions such as focusing the map on a selected device or retrieving historical routes.
-
-<div align="center">
-<img src="assets/Captura de tela 2026-06-03 013040.png" width="900"/>
-</div>
+> **Check:** the SMTP host in this configuration currently reads `smtp.gmail.com1` — the trailing `1` looks like a typo and should be verified/corrected to `smtp.gmail.com`.
 
 ---
 
-## 7. User Interface
+## 7. Conclusion
 
-### No Connected Devices
-
-Dashboard state when no devices are online.
-
-<div align="center">
-<img src="assets/Captura de tela 2026-06-03 031806.png" width="900"/>
-</div>
-
----
-
-### Simulated Device Online
-
-Dashboard displaying an active simulated device.
-
-<div align="center">
-<img src="assets/Captura de tela 2026-06-03 031823.png" width="900"/>
-</div>
-
----
-
-### Historical Route Visualization
-
-Dashboard displaying the historical route of the simulated device.
-
-<div align="center">
-<img src="assets/Captura de tela 2026-06-03 031840.png" width="900"/>
-</div>
-
----
-
-## 8. Conclusion
-
-The developed system successfully demonstrates an end-to-end IoT tracking solution capable of collecting GPS information, transmitting data securely through MQTT, storing historical records in a time-series database, and providing real-time visualization through a web dashboard. The modular architecture based on ESP-IDF, FreeRTOS, Node-RED, and InfluxDB allows the platform to be easily extended for additional telemetry data, fleet monitoring, and advanced analytics.
+The developed system successfully demonstrates an end-to-end IoT intrusion detection solution for unmanned distribution transformer sites. LoRaWAN PIR sensors report motion events through a private Loriot network server into ThingsBoard Cloud, where rule chains decode the payload, deduplicate repeated triggers, raise an alarm, notify site operators by email, and issue a downlink command to actuate a relay/actuator node — all without relying on site power or wired connectivity. The modular rule-chain architecture (Root Rule Chain plus per-device alarm chains) allows the platform to be extended to additional sensor types and transformer sites with minimal changes.
